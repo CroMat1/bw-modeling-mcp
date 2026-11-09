@@ -291,6 +291,31 @@ For **local (stdio)** use, the server is configured via environment variables. F
 | `BW_MCP_SYSTEM_LABEL` | Free-text label of the connected BW system (e.g. `AP4 (BW production, read-only)`), put at the top of the MCP server instructions. Lets a model tell look-alike instances apart even in clients that show an opaque connector id instead of the server name. | no |
 | `BW_PLATFORM` | `auto` (default), `classic` or `bw4`. The server detects whether it is talking to BW/4HANA or a classic release and offers only the tools that release can answer. `classic` forces that verdict when detection cannot run, `bw4` switches the filter off. See [bw75/BW75-SUPPORT.md](bw75/BW75-SUPPORT.md). | no |
 | `BW_SESSION_CLOSE` | `on` (default) or `off`. The server ends the SAP sessions of a tool call once it is answered, and all remaining ones when it stops. Set `off` only behind a proxy that holds the SAP session itself. | no |
+| `BW_READ_ONLY` | Modalita' sola lettura, **attiva per default**. Si spegne solo con `0` o `false`. Vedi sotto. | no |
+
+### Modalità sola lettura
+
+Questo fork punta al BW/4HANA di **produzione**, quindi il server parte in sola lettura salvo
+indicazione contraria.
+
+- `BW_READ_ONLY` non impostata, vuota o con qualunque valore diverso da `0`/`false` → **sola lettura**.
+- `BW_READ_ONLY=0` oppure `BW_READ_ONLY=false` → catalogo completo (130 tool).
+
+In sola lettura i tool di scrittura (crea, modifica, attiva, cancella, sblocca, esegui DTP/catene/remodeling,
+push dati, trasporti) **non vengono registrati** in `tools/list` (52 tool esposti su 130) e, se un client li
+chiama comunque, la chiamata viene rifiutata prima di contattare SAP. Le istruzioni MCP del server lo dichiarano.
+
+La classificazione sta in un solo punto, `src/scopes.ts`: l'insieme `READ_TOOLS` elenca le letture e tutto il
+resto è scrittura (un tool nuovo non classificato resta quindi nascosto in sola lettura); `DESTRUCTIVE_TOOLS`
+marca il sottoinsieme distruttivo. Ogni tool pubblica le annotazioni MCP standard `readOnlyHint` e
+`destructiveHint` (più `openWorldHint: true`), in entrambe le modalità.
+
+Il filtro vale per ogni trasporto, quindi anche per l'HTTP/BTP: un deploy che deve scrivere va configurato
+con `BW_READ_ONLY=0`. Nota: `bw_query_data` e `bw_preview_datasource` sono letture ma restituiscono dati.
+
+L'elenco dei tool esposti in sola lettura è in [`tools-readonly.txt`](tools-readonly.txt). I test
+(`npm test`, cartella `test/`, senza SAP) verificano che in sola lettura `tools/list` non contenga scritture
+e che con `BW_READ_ONLY=0` le contenga. Per avviare il server senza rete usare `BW_PLATFORM=bw4`.
 
 **Cookie authentication (BW Bridge / SAP BTP):** For BW systems that sit behind a SAML or OAuth login (such as BW Bridge on the SAP BTP ABAP stack), Basic Auth is not available. Export the authenticated session cookies from your browser into a file and point `BW_COOKIE_FILE` at it. The login/session approach is analogous to [vibing-steampunk](https://github.com/oisee/vibing-steampunk) and [ARC-1](https://github.com/arc-mcp/arc-1). When the session expires, refresh the cookie file and restart the server.
 

@@ -14,7 +14,7 @@ import { createRequire } from 'node:module';
 
 import { closeAllSessions, createClientFromEnv, withSessionScope, type BwClient } from './bw-client.js';
 import { currentClient } from './request-context.js';
-import { filterToolsByScope, mayCall, requiredScope, scopesFor } from './scopes.js';
+import { applyServerMode, filterToolsByScope, isReadOnlyTool, mayCall, readOnlyMode, requiredScope, scopesFor } from './scopes.js';
 import { undeclaredArguments } from './arguments.js';
 import {
   cachedPlatform,
@@ -6475,6 +6475,15 @@ async function handleToolCall(
     throw new McpError(ErrorCode.InvalidRequest, `Tool '${name}' requires the ${admitted} scope.`);
   }
 
+  // Sola lettura (BW_READ_ONLY, attiva per default): le scritture non sono nemmeno in
+  // tools/list, ma un client con un catalogo vecchio potrebbe chiamarle lo stesso.
+  if (readOnlyMode() && !isReadOnlyTool(name)) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Tool '${name}' is a write tool and this server runs in read-only mode (BW_READ_ONLY).`,
+    );
+  }
+
   // A write tool that ignored an argument it does not know would report a change it never made.
   if (requiredScope(name) === 'write') {
     const refused = undeclaredArguments(TOOL_DEFINITIONS.find((t) => t.name === name), args);
@@ -7954,6 +7963,9 @@ function buildInstructions(): string {
     'definitions on this system.',
     '',
     'One BW system per instance: there is no system selector, by design.',
+    ...(readOnlyMode()
+      ? ['', 'READ-ONLY MODE (BW_READ_ONLY): only tools that read are exposed; nothing can be created, changed, activated, deleted, run or transported.']
+      : []),
     ...platformInstructions(cachedPlatform()),
   ].join('\n');
 }
@@ -7984,7 +7996,10 @@ export function createServer(): Server {
     } catch {
       profile = cachedPlatform();
     }
-    return { tools: filterToolsByPlatform(filterToolsByScope(TOOL_DEFINITIONS, extra.authInfo), profile) };
+    // Terzo filtro: BW_READ_ONLY toglie le scritture; in ogni caso aggiunge le annotazioni MCP.
+    return {
+      tools: applyServerMode(filterToolsByPlatform(filterToolsByScope(TOOL_DEFINITIONS, extra.authInfo), profile)),
+    };
   });
 
   server.setRequestHandler(CallToolRequestSchema, (request, extra) =>

@@ -153,6 +153,80 @@ export function requiredScope(toolName: string): Scope {
   return scopesFor(toolName)[0];
 }
 
+// ── Modalita' sola lettura (BW_READ_ONLY) ─────────────────────────────────────
+//
+// Unico punto di classificazione: READ_TOOLS (sopra) dice cosa legge, tutto il resto e'
+// scrittura. DESTRUCTIVE_TOOLS e' il sottoinsieme delle scritture che cancellano dati o
+// oggetti, muovono dati (DTP, catene, push, remodeling) o cambiano stati difficili da
+// ripristinare. Serve solo per l'annotazione `destructiveHint`.
+
+const DESTRUCTIVE_TOOLS = new Set([
+  // cancellazioni
+  'bw_delete',
+  'bw_delete_request',
+  'bw_delete_adso_data_selective',
+  'bw_delete_hierarchy',
+  'bw_delete_transformation_routine',
+  'bw_remove_process_chain_step',
+  'bw_remove_process_chain_edge',
+  // esecuzioni che muovono dati
+  'bw_run_dtp',
+  'bw_start_process_chain',
+  'bw_run_remodeling',
+  'bw_push_data',
+  'bw_activate_request',
+  // cambi di stato rischiosi
+  'bw_change_datasource_delta',
+  'bw_set_adso_planning_mode',
+  'bw_update_hierarchy',
+  'bw_save_afo_workbook',
+  'bw_unlock',
+  'bw_activate',
+  'bw_activate_process_chain',
+  'bw_create_transport_task',
+]);
+
+/** True se il tool non modifica nulla nel BW. Un nome sconosciuto e' una scrittura. */
+export function isReadOnlyTool(toolName: string): boolean {
+  return READ_TOOLS.has(toolName);
+}
+
+/**
+ * BW_READ_ONLY: attivo per default. Lo spegne solo un valore esplicito "0" o "false"
+ * (senza distinzione di maiuscole). Qualunque altro valore, o l'assenza, lo lascia attivo.
+ */
+export function readOnlyMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = (env.BW_READ_ONLY ?? '').trim().toLowerCase();
+  return !(v === '0' || v === 'false');
+}
+
+/** Annotazioni MCP standard derivate dalla classificazione. */
+export function toolAnnotations(toolName: string): {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  openWorldHint: boolean;
+} {
+  const readOnly = isReadOnlyTool(toolName);
+  return {
+    readOnlyHint: readOnly,
+    destructiveHint: !readOnly && DESTRUCTIVE_TOOLS.has(toolName),
+    openWorldHint: true,
+  };
+}
+
+/**
+ * Catalogo da pubblicare: in sola lettura toglie le scritture, e in ogni caso aggiunge le
+ * annotazioni (senza toccare eventuali annotazioni gia' presenti nella definizione).
+ */
+export function applyServerMode<T extends { name: string; annotations?: Record<string, unknown> }>(
+  tools: readonly T[],
+  readOnly: boolean = readOnlyMode(),
+): Array<T & { annotations: Record<string, unknown> }> {
+  return tools
+    .filter((t) => !readOnly || isReadOnlyTool(t.name))
+    .map((t) => ({ ...t, annotations: { ...toolAnnotations(t.name), ...(t.annotations ?? {}) } }));
+}
+
 /** Accepts bare or XSUAA-qualified scopes (`bwmcp!t123.read`). */
 function has(scopes: readonly string[], scope: Scope): boolean {
   return scopes.some((s) => s === scope || s.endsWith(`.${scope}`));
